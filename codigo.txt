@@ -1,0 +1,152 @@
+Bloque 1
+# Instalar dependencias
+!pip install roboflow ultralytics opencv-python pytube
+
+
+Bloque 2
+
+from roboflow import Roboflow
+
+rf = Roboflow(api_key="zVW6TZgUzNtSoM7KPkPJ")
+project = rf.workspace("dogandcat-tojsg").project("dog-and-cat-eu2ol")
+version = project.version(1)
+dataset = version.download("yolov11")  # YOLOv8 es retrocompatible con YOLOv11
+
+Bloque 3
+
+from zipfile import ZipFile
+from google.colab import files
+
+# Subir el archivo ZIP que contiene las imágenes etiquetadas
+uploaded = files.upload()
+
+# Extraer el contenido del archivo ZIP al directorio del dataset
+with ZipFile(list(uploaded.keys())[0], 'r') as zip_ref:
+    zip_ref.extractall(dataset.location)  # Extraer en la ubicación del dataset
+
+Bloque 4
+
+from ultralytics import YOLO
+
+# Cargar el modelo YOLOv11 preentrenado (versión Nano)
+model = YOLO("yolo11n.pt")  # Puedes cambiar a "yolo11s.pt", "yolo11m.pt", etc., según los recursos disponibles
+
+# Entrenar el modelo con el dataset
+model.train(
+    data=f"{dataset.location}/data.yaml",  # Ruta del archivo YAML del dataset
+    epochs=50,  # Número de épocas de entrenamiento
+    imgsz=640,  # Tamaño de las imágenes (puedes ajustar según el tamaño del dataset)
+    project="dog_cat_project",  # Carpeta donde se guardará el proyecto
+    name="yolo_dog_cat",  # Nombre del modelo entrenado
+    workers=2  # Número de procesos de carga de datos (ajusta según los recursos de Colab)
+)
+
+# Descargar el modelo entrenado (mejor peso obtenido durante el entrenamiento)
+from google.colab import files
+files.download(f"dog_cat_project/yolo_dog_cat/weights/best.pt")
+
+
+Bloque 5
+
+from google.colab import files
+import os
+
+# Subir el video manualmente
+uploaded = files.upload()
+
+# Renombrar el archivo subido a "video.mp4"
+uploaded_file = list(uploaded.keys())[0]
+os.rename(uploaded_file, "video.mp4")
+
+print("Video subido y renombrado a video.mp4")
+
+
+Bloque 6
+
+import cv2
+import datetime
+from ultralytics import YOLO
+import os
+
+# Verificar el archivo de entrada
+if not os.path.exists("video.mp4"):
+    raise FileNotFoundError("Error: No se encontró el archivo de entrada video.mp4.")
+
+# Verificar el modelo entrenado
+if not os.path.exists("dog_cat_project/yolo_dog_cat/weights/best.pt"):
+    raise FileNotFoundError("Error: No se encontró el modelo entrenado. Asegúrate de que el entrenamiento se completó.")
+
+# Cargar el modelo YOLOv11 entrenado
+model = YOLO("dog_cat_project/yolo_dog_cat/weights/best.pt")
+
+# Configurar el video de entrada y salida
+cap = cv2.VideoCapture("video.mp4")
+if not cap.isOpened():
+    raise FileNotFoundError("Error: No se pudo abrir el archivo video.mp4.")
+
+fps = int(cap.get(cv2.CAP_PROP_FPS))
+width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+out = cv2.VideoWriter(
+    "output_video.mp4",
+    cv2.VideoWriter_fourcc(*"mp4v"),
+    fps,
+    (width, height),
+)
+
+# Función para dibujar los bounding boxes personalizados
+def draw_custom_boxes(frame, results):
+    height, width, _ = frame.shape
+    top_left = (int(width * 0.1), int(height * 0.1))
+    bottom_right = (int(width * 0.9), int(height * 0.9))
+    cv2.rectangle(frame, top_left, bottom_right, (0, 255, 255), 2, lineType=cv2.LINE_AA)
+
+    class_counts = {}
+
+    for result in results:
+        boxes = result.boxes
+        for box in boxes:
+            x1, y1, x2, y2 = box.xyxy[0]
+            class_id = int(box.cls[0])
+            class_name = model.names[class_id]
+
+            x1, y1, x2, y2 = map(int, (x1, y1, x2, y2))
+
+            if x1 >= top_left[0] and y1 >= top_left[1] and x2 <= bottom_right[0] and y2 <= bottom_right[1]:
+                color = (0, 255, 0) if class_name == "gato" else (255, 0, 0)
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                cv2.putText(frame, f"{class_name}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+                class_counts[class_name] = class_counts.get(class_name, 0) + 1
+
+    time_now = datetime.datetime.now().strftime("%H:%M:%S")
+    cv2.putText(frame, f"Tiempo: {time_now}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+
+    y_offset = 60
+    for class_name, count in class_counts.items():
+        color = (0, 255, 0) if class_name == "gato" else (255, 0, 0)
+        cv2.putText(frame, f"{class_name}: {count}", (10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
+        y_offset += 30
+
+    return frame
+
+# Procesar el video
+while cap.isOpened():
+    ret, frame = cap.read()
+    if not ret:
+        break
+
+    results = model(frame)
+    frame = draw_custom_boxes(frame, results)
+    out.write(frame)
+
+cap.release()
+out.release()
+
+# Verificar si el archivo de salida fue creado
+if not os.path.exists("output_video.mp4"):
+    raise FileNotFoundError("Error: No se pudo generar el archivo de salida output_video.mp4.")
+
+# Descargar el video procesado
+from google.colab import files
+files.download("output_video.mp4")
